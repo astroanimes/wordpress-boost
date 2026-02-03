@@ -25,7 +25,18 @@ composer require thanoseleftherakos/wordpress-boost --dev
 php vendor/bin/wp-boost --init
 ```
 
-That's it! The `--init` flag creates a `.mcp.json` file that editors auto-detect.
+That's it! The `--init` flag creates a `.mcp.json` file and installs AI guidelines and skills to `.ai/` directory.
+
+### CLI Options
+
+```bash
+php vendor/bin/wp-boost --init                # Full setup: .mcp.json + AI files
+php vendor/bin/wp-boost --init --no-ai-files  # Only create .mcp.json config
+php vendor/bin/wp-boost --guidelines-only     # Install only AI guidelines to .ai/guidelines/
+php vendor/bin/wp-boost --skills-only         # Install only AI skills to .ai/skills/
+php vendor/bin/wp-boost --version             # Display version
+php vendor/bin/wp-boost --help                # Show help
+```
 
 ### Without Composer
 
@@ -70,6 +81,29 @@ claude mcp add wordpress-boost -- php vendor/bin/wp-boost
 
 No `--path` needed - WordPress Boost auto-discovers your WordPress installation from the current directory.
 
+## AI Guidelines & Skills
+
+WordPress Boost includes curated AI guidelines and skills that help AI assistants write better WordPress code. These are installed to your project's `.ai/` directory.
+
+### Guidelines (`.ai/guidelines/`)
+- `wordpress-core.md` - Core WordPress patterns and best practices
+- `theme-development.md` - Theme development standards
+- `plugin-development.md` - Plugin development patterns
+- `rest-api.md` - REST API development
+- `gutenberg-blocks.md` - Block editor development
+- `security.md` - WordPress security practices
+- `acf.md` - Advanced Custom Fields patterns
+- `woocommerce.md` - WooCommerce development
+
+### Skills (`.ai/skills/`)
+- `theme-development` - Theme creation and customization
+- `plugin-development` - Plugin architecture and hooks
+- `rest-api-development` - Custom REST endpoints
+- `gutenberg-blocks` - Custom block development
+- `acf-development` - ACF field groups and usage
+- `woocommerce-development` - WooCommerce extensions
+- `wp-cli-commands` - WP-CLI command creation
+
 ## Available Tools
 
 ### Site Information
@@ -112,6 +146,13 @@ No `--path` needed - WordPress Boost auto-discovers your WordPress installation 
 | `wp_shell` | Execute PHP code in WordPress context |
 | `last_error` | Read debug.log entries |
 | `list_wp_cli_commands` | Available WP-CLI commands |
+
+### URLs & Environment
+| Tool | Description |
+|------|-------------|
+| `urls` | Get all WordPress URLs (home, site, admin, REST, content, etc.) |
+| `environment` | Server environment info (PHP, MySQL, extensions, memory limits) |
+| `security` | Security audit (file permissions, debug settings, SSL, updates) |
 
 ### ACF Integration (when ACF is active)
 | Tool | Description |
