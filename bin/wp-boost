@@ -12,8 +12,9 @@ declare(strict_types=1);
 
 // Find autoloader
 $autoloadPaths = [
-    __DIR__ . '/../vendor/autoload.php',           // When installed as a project
-    __DIR__ . '/../../../autoload.php',            // When installed as a dependency
+    __DIR__ . '/../vendor/autoload.php',           // When running as a project (bin/wp-boost)
+    __DIR__ . '/../autoload.php',                  // When in vendor/bin/ (Composer copies bin files)
+    __DIR__ . '/../../../autoload.php',            // When symlinked from vendor/bin to vendor/package/bin
 ];
 
 $autoloaderFound = false;
@@ -127,7 +128,32 @@ if (isset($options['init'])) {
 }
 
 // Determine WordPress path
-$wpPath = $options['path'] ?? getcwd();
+// Priority: 1) --path argument, 2) script location (walk up to find wp-load.php), 3) getcwd()
+$wpPath = $options['path'] ?? null;
+
+if ($wpPath === null) {
+    // Try to find WordPress by walking up from the script's location
+    // This works when wp-boost is installed as a dependency in a theme/plugin
+    $path = __DIR__;
+    $maxDepth = 15; // Enough depth for themes/plugins in subdirectories
+
+    for ($i = 0; $i < $maxDepth; $i++) {
+        if (file_exists($path . '/wp-load.php')) {
+            $wpPath = $path;
+            break;
+        }
+        $parentPath = dirname($path);
+        if ($parentPath === $path) {
+            break;
+        }
+        $path = $parentPath;
+    }
+
+    // Fall back to current working directory if not found from script location
+    if ($wpPath === null) {
+        $wpPath = getcwd();
+    }
+}
 
 // Bootstrap WordPress
 try {
