@@ -23,6 +23,9 @@ use WordPressBoost\Tools\WooCommerce;
 use WordPressBoost\Tools\Blocks;
 use WordPressBoost\Tools\Documentation;
 use WordPressBoost\Tools\DataGenerator;
+use WordPressBoost\Tools\Urls;
+use WordPressBoost\Tools\Environment;
+use WordPressBoost\Tools\Security;
 
 /**
  * MCP Server
@@ -76,6 +79,9 @@ class McpServer
         $this->tools['blocks'] = new Blocks();
         $this->tools['documentation'] = new Documentation();
         $this->tools['data_generator'] = new DataGenerator();
+        $this->tools['urls'] = new Urls();
+        $this->tools['environment'] = new Environment();
+        $this->tools['security'] = new Security();
 
         // Conditional tools based on active plugins
         if (class_exists('ACF') || function_exists('acf_get_field_groups')) {

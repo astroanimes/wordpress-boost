@@ -10,6 +10,261 @@
 
 declare(strict_types=1);
 
+// Parse command line arguments early (before autoloader for setup commands)
+$options = getopt('', ['path:', 'help', 'version', 'init', 'guidelines-only', 'skills-only', 'no-ai-files']);
+
+// Handle --help (doesn't need autoloader)
+if (isset($options['help'])) {
+    echo <<<HELP
+WordPress Boost MCP Server
+
+Usage:
+  wp-boost [options]
+
+Options:
+  --path=<path>       Path to WordPress installation (default: current directory)
+  --init              Create .mcp.json and install AI guidelines/skills to .ai/ directory
+  --guidelines-only   Only install AI guidelines to .ai/guidelines/
+  --skills-only       Only install AI skills to .ai/skills/
+  --no-ai-files       Skip installing AI files during --init
+  --help              Display this help message
+  --version           Display version information
+
+Examples:
+  wp-boost --init                              # Full setup with MCP config and AI files
+  wp-boost --init --no-ai-files                # Only create .mcp.json config
+  wp-boost --guidelines-only                   # Install only guidelines
+  wp-boost --skills-only                       # Install only skills
+  wp-boost                                     # Run MCP server
+  wp-boost --path=/var/www/html/wordpress      # Run with custom path
+
+HELP;
+    exit(0);
+}
+
+// Handle --version (doesn't need autoloader)
+if (isset($options['version'])) {
+    $composerJson = __DIR__ . '/../composer.json';
+    $version = 'unknown';
+    if (file_exists($composerJson)) {
+        $composer = json_decode(file_get_contents($composerJson), true);
+        $version = $composer['version'] ?? 'unknown';
+    }
+    echo "WordPress Boost v{$version}\n";
+    exit(0);
+}
+
+/**
+ * Get the package root directory (where resources/ is located)
+ */
+function getPackageRoot(): string
+{
+    // Try different locations based on how the package is installed
+    $possibleRoots = [
+        __DIR__ . '/..',                    // Running from bin/ directly
+        __DIR__ . '/../../../thanoseleftherakos/wordpress-boost',  // Installed via composer
+    ];
+
+    foreach ($possibleRoots as $root) {
+        $realPath = realpath($root);
+        if ($realPath && is_dir($realPath . '/resources/ai')) {
+            return $realPath;
+        }
+    }
+
+    // Fallback: walk up from __DIR__ looking for resources/ai
+    $path = __DIR__;
+    for ($i = 0; $i < 5; $i++) {
+        $path = dirname($path);
+        if (is_dir($path . '/resources/ai')) {
+            return $path;
+        }
+    }
+
+    return dirname(__DIR__); // Default fallback
+}
+
+/**
+ * Install AI guidelines to the target directory
+ */
+function installGuidelines(string $targetDir): int
+{
+    $packageRoot = getPackageRoot();
+    $sourceDir = $packageRoot . '/resources/ai/guidelines';
+    $destDir = $targetDir . '/.ai/guidelines';
+
+    if (!is_dir($sourceDir)) {
+        fwrite(STDERR, "Warning: Guidelines source not found at {$sourceDir}\n");
+        return 0;
+    }
+
+    if (!is_dir($destDir)) {
+        mkdir($destDir, 0755, true);
+    }
+
+    $count = 0;
+    $files = glob($sourceDir . '/*.md');
+    foreach ($files as $file) {
+        $filename = basename($file);
+        $destFile = $destDir . '/' . $filename;
+
+        // Don't overwrite existing files
+        if (!file_exists($destFile)) {
+            copy($file, $destFile);
+            $count++;
+        }
+    }
+
+    return $count;
+}
+
+/**
+ * Install AI skills to the target directory
+ */
+function installSkills(string $targetDir): int
+{
+    $packageRoot = getPackageRoot();
+    $sourceDir = $packageRoot . '/resources/ai/skills';
+    $destDir = $targetDir . '/.ai/skills';
+
+    if (!is_dir($sourceDir)) {
+        fwrite(STDERR, "Warning: Skills source not found at {$sourceDir}\n");
+        return 0;
+    }
+
+    if (!is_dir($destDir)) {
+        mkdir($destDir, 0755, true);
+    }
+
+    $count = 0;
+    $skillDirs = glob($sourceDir . '/*', GLOB_ONLYDIR);
+    foreach ($skillDirs as $skillDir) {
+        $skillName = basename($skillDir);
+        $destSkillDir = $destDir . '/' . $skillName;
+
+        if (!is_dir($destSkillDir)) {
+            mkdir($destSkillDir, 0755, true);
+        }
+
+        $skillFile = $skillDir . '/SKILL.md';
+        $destSkillFile = $destSkillDir . '/SKILL.md';
+
+        if (file_exists($skillFile) && !file_exists($destSkillFile)) {
+            copy($skillFile, $destSkillFile);
+            $count++;
+        }
+    }
+
+    return $count;
+}
+
+// Handle --guidelines-only (doesn't need autoloader)
+if (isset($options['guidelines-only'])) {
+    $targetDir = getcwd();
+    $count = installGuidelines($targetDir);
+    if ($count > 0) {
+        echo "✓ Installed {$count} guideline file(s) to .ai/guidelines/\n";
+    } else {
+        echo "No new guidelines to install (files may already exist)\n";
+    }
+    exit(0);
+}
+
+// Handle --skills-only (doesn't need autoloader)
+if (isset($options['skills-only'])) {
+    $targetDir = getcwd();
+    $count = installSkills($targetDir);
+    if ($count > 0) {
+        echo "✓ Installed {$count} skill(s) to .ai/skills/\n";
+    } else {
+        echo "No new skills to install (files may already exist)\n";
+    }
+    exit(0);
+}
+
+// Handle --init (doesn't need autoloader)
+if (isset($options['init'])) {
+    $configPath = getcwd() . '/.mcp.json';
+    $wpBoostPath = 'vendor/bin/wp-boost';
+
+    $wordpressBoostConfig = [
+        'command' => 'php',
+        'args' => [$wpBoostPath],
+    ];
+
+    // Check if .mcp.json already exists
+    if (file_exists($configPath)) {
+        $existingContent = file_get_contents($configPath);
+        $existingConfig = json_decode($existingContent, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            fwrite(STDERR, "Error: Existing .mcp.json is not valid JSON\n");
+            exit(1);
+        }
+
+        // Check if wordpress-boost is already configured
+        $serverKey = $existingConfig['mcpServers'] ?? $existingConfig['servers'] ?? [];
+        if (isset($serverKey['wordpress-boost'])) {
+            echo "✓ wordpress-boost is already configured in .mcp.json\n";
+        } else {
+            // Add wordpress-boost to existing config (support both formats)
+            if (isset($existingConfig['mcpServers'])) {
+                $existingConfig['mcpServers']['wordpress-boost'] = $wordpressBoostConfig;
+            } elseif (isset($existingConfig['servers'])) {
+                $existingConfig['servers']['wordpress-boost'] = $wordpressBoostConfig;
+            } else {
+                $existingConfig['mcpServers'] = ['wordpress-boost' => $wordpressBoostConfig];
+            }
+
+            $config = $existingConfig;
+            $json = json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+            if (file_put_contents($configPath, $json . "\n") === false) {
+                fwrite(STDERR, "Error: Could not write .mcp.json\n");
+                exit(1);
+            }
+            echo "✓ Added wordpress-boost to existing .mcp.json\n";
+        }
+    } else {
+        // Create new config
+        $config = [
+            'mcpServers' => [
+                'wordpress-boost' => $wordpressBoostConfig,
+            ],
+        ];
+
+        $json = json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+        if (file_put_contents($configPath, $json . "\n") === false) {
+            fwrite(STDERR, "Error: Could not write .mcp.json\n");
+            exit(1);
+        }
+        echo "✓ Created .mcp.json\n";
+    }
+
+    // Install AI files unless --no-ai-files is specified
+    if (!isset($options['no-ai-files'])) {
+        $guidelinesCount = installGuidelines(getcwd());
+        $skillsCount = installSkills(getcwd());
+
+        if ($guidelinesCount > 0) {
+            echo "✓ Installed {$guidelinesCount} guideline file(s) to .ai/guidelines/\n";
+        }
+        if ($skillsCount > 0) {
+            echo "✓ Installed {$skillsCount} skill(s) to .ai/skills/\n";
+        }
+    }
+
+    echo "\nNext steps:\n";
+    echo "  1. Open this folder in your AI editor (Cursor, VS Code, Windsurf)\n";
+    echo "  2. The MCP server will be available automatically\n";
+    echo "\nFor Claude Code:\n";
+    echo "  claude mcp add wordpress-boost -- php vendor/bin/wp-boost\n";
+    exit(0);
+}
+
+// --- From here on, we need the autoloader for MCP server functionality ---
+
 // Find autoloader
 $autoloadPaths = [
     __DIR__ . '/../vendor/autoload.php',           // When running as a project (bin/wp-boost)
@@ -34,98 +289,6 @@ if (!$autoloaderFound) {
 
 use WordPressBoost\McpServer;
 use WordPressBoost\WordPress\Bootstrap;
-
-// Parse command line arguments
-$options = getopt('', ['path:', 'help', 'version', 'init']);
-
-if (isset($options['help'])) {
-    echo <<<HELP
-WordPress Boost MCP Server
-
-Usage:
-  wp-boost [options]
-
-Options:
-  --path=<path>    Path to WordPress installation (default: current directory)
-  --init           Create .mcp.json configuration file in current directory
-  --help           Display this help message
-  --version        Display version information
-
-Examples:
-  wp-boost --init                              # Create .mcp.json config
-  wp-boost                                     # Run MCP server
-  wp-boost --path=/var/www/html/wordpress      # Run with custom path
-
-HELP;
-    exit(0);
-}
-
-if (isset($options['version'])) {
-    echo "WordPress Boost v0.1.0\n";
-    exit(0);
-}
-
-if (isset($options['init'])) {
-    $configPath = getcwd() . '/.mcp.json';
-    $wpBoostPath = 'vendor/bin/wp-boost';
-
-    $wordpressBoostConfig = [
-        'command' => 'php',
-        'args' => [$wpBoostPath],
-    ];
-
-    // Check if .mcp.json already exists
-    if (file_exists($configPath)) {
-        $existingContent = file_get_contents($configPath);
-        $existingConfig = json_decode($existingContent, true);
-
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            fwrite(STDERR, "Error: Existing .mcp.json is not valid JSON\n");
-            exit(1);
-        }
-
-        // Check if wordpress-boost is already configured
-        $serverKey = $existingConfig['mcpServers'] ?? $existingConfig['servers'] ?? [];
-        if (isset($serverKey['wordpress-boost'])) {
-            echo "✓ wordpress-boost is already configured in .mcp.json\n";
-            exit(0);
-        }
-
-        // Add wordpress-boost to existing config (support both formats)
-        if (isset($existingConfig['mcpServers'])) {
-            $existingConfig['mcpServers']['wordpress-boost'] = $wordpressBoostConfig;
-        } elseif (isset($existingConfig['servers'])) {
-            $existingConfig['servers']['wordpress-boost'] = $wordpressBoostConfig;
-        } else {
-            $existingConfig['mcpServers'] = ['wordpress-boost' => $wordpressBoostConfig];
-        }
-
-        $config = $existingConfig;
-        echo "✓ Added wordpress-boost to existing .mcp.json\n";
-    } else {
-        // Create new config
-        $config = [
-            'mcpServers' => [
-                'wordpress-boost' => $wordpressBoostConfig,
-            ],
-        ];
-        echo "✓ Created .mcp.json\n";
-    }
-
-    $json = json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-
-    if (file_put_contents($configPath, $json . "\n") === false) {
-        fwrite(STDERR, "Error: Could not write .mcp.json\n");
-        exit(1);
-    }
-
-    echo "\nNext steps:\n";
-    echo "  1. Open this folder in your AI editor (Cursor, VS Code, Windsurf)\n";
-    echo "  2. The MCP server will be available automatically\n";
-    echo "\nFor Claude Code:\n";
-    echo "  claude mcp add wordpress-boost -- php vendor/bin/wp-boost\n";
-    exit(0);
-}
 
 // Determine WordPress path
 // Priority: 1) --path argument, 2) script location (walk up to find wp-load.php), 3) getcwd()
