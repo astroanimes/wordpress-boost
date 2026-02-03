@@ -53,17 +53,14 @@ abstract class BaseTool
         $definition = [
             'name' => $name,
             'description' => $description,
+            'inputSchema' => [
+                'type' => 'object',
+                'properties' => empty($properties) ? (object)[] : $properties,
+            ],
         ];
 
-        if (!empty($properties)) {
-            $definition['inputSchema'] = [
-                'type' => 'object',
-                'properties' => $properties,
-            ];
-
-            if (!empty($required)) {
-                $definition['inputSchema']['required'] = $required;
-            }
+        if (!empty($required)) {
+            $definition['inputSchema']['required'] = $required;
         }
 
         return $definition;

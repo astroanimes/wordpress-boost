@@ -153,9 +153,9 @@ class McpServer
     private function handleInitialize(array $params): array
     {
         return [
-            'protocolVersion' => '2024-11-05',
-            'capabilities' => [
-                'tools' => [
+            'protocolVersion' => '2025-11-25',
+            'capabilities' => (object)[
+                'tools' => (object)[
                     'listChanged' => false,
                 ],
             ],
