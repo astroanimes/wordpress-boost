@@ -22,8 +22,10 @@ WordPress Boost gives AI coding assistants (Claude Code, Cursor, Windsurf, etc.)
 ```bash
 cd /path/to/wordpress
 composer require thanoseleftherakos/wordpress-boost --dev
-wp boost:install
+php vendor/bin/wp-boost --init
 ```
+
+That's it! The `--init` flag creates a `.mcp.json` file that editors auto-detect.
 
 ### Without Composer
 
@@ -35,8 +37,14 @@ git clone https://github.com/thanoseleftherakos/wordpress-boost.git ~/wordpress-
 cd ~/wordpress-boost
 composer install
 
-# Create .mcp.json in your WordPress project
-cat > /path/to/wordpress/.mcp.json << 'EOF'
+# Initialize in your WordPress project
+cd /path/to/wordpress
+php ~/wordpress-boost/bin/wp-boost --init
+```
+
+Then edit `.mcp.json` to use the absolute path:
+
+```json
 {
     "servers": {
         "wordpress-boost": {
@@ -45,55 +53,22 @@ cat > /path/to/wordpress/.mcp.json << 'EOF'
         }
     }
 }
-EOF
 ```
-
-Replace `/Users/YOUR_USERNAME/wordpress-boost` with the actual path where you cloned the repo.
 
 ## Quick Start
 
 ### For Cursor / VS Code / Windsurf
 
-These editors auto-detect `.mcp.json` files. If you used the installation steps above, just open your WordPress project and the MCP server will be available automatically.
+These editors auto-detect `.mcp.json` files. After running `--init`, just open your WordPress project and the MCP server will be available automatically.
 
 ### For Claude Code
 
 ```bash
 cd /path/to/wordpress
-
-# With Composer installation:
 claude mcp add wordpress-boost -- php vendor/bin/wp-boost
-
-# Without Composer (use absolute path to cloned repo):
-claude mcp add wordpress-boost -- php ~/wordpress-boost/bin/wp-boost
 ```
 
 No `--path` needed - WordPress Boost auto-discovers your WordPress installation from the current directory.
-
-### With WP-CLI
-
-If you installed via Composer:
-
-```bash
-cd /path/to/wordpress
-wp boost:mcp
-```
-
-### Manual MCP Configuration
-
-Add to your editor's MCP configuration:
-
-```json
-{
-  "mcpServers": {
-    "wordpress-boost": {
-      "command": "php",
-      "args": ["/path/to/wp-boost/bin/wp-boost"],
-      "cwd": "/path/to/your/wordpress"
-    }
-  }
-}
-```
 
 ## Available Tools
 
@@ -191,8 +166,7 @@ The `wp_shell` tool only works when `WP_DEBUG` is enabled. It also prevents dang
 
 - PHP 7.4 or higher
 - WordPress 5.0 or higher
-- Composer (to install wordpress-boost dependencies, not required in your WordPress project)
-- WP-CLI (optional, for `wp boost:*` commands)
+- Composer (for installation)
 
 ## Optional Dependencies
 
