@@ -337,12 +337,18 @@ class Security extends BaseTool
                 ],
                 []
             ),
+            $this->createToolDefinition(
+                'site_security_audit',
+                'Perform a comprehensive WordPress site security audit. Checks for information disclosure, XML-RPC, login security, configuration, updates, file permissions, and security headers. Returns issues categorized by severity with actionable recommendations.',
+                [],
+                []
+            ),
         ];
     }
 
     public function handles(string $name): bool
     {
-        return in_array($name, ['security_audit', 'security_check_file', 'list_security_functions']);
+        return in_array($name, ['security_audit', 'security_check_file', 'list_security_functions', 'site_security_audit']);
     }
 
     public function execute(string $name, array $arguments): mixed
@@ -354,6 +360,7 @@ class Security extends BaseTool
             ),
             'security_check_file' => $this->securityCheckFile($arguments['file_path']),
             'list_security_functions' => $this->listSecurityFunctions($arguments['category'] ?? 'all'),
+            'site_security_audit' => $this->siteSecurityAudit(),
             default => throw new \RuntimeException("Unknown tool: {$name}"),
         };
     }
@@ -451,6 +458,719 @@ class Security extends BaseTool
             'category' => $category,
             'functions' => $this->securityFunctions[$category],
         ];
+    }
+
+    /**
+     * Perform a comprehensive WordPress site security audit
+     */
+    private function siteSecurityAudit(): array
+    {
+        // Check if WordPress is loaded
+        if (!defined('ABSPATH')) {
+            return [
+                'error' => 'WordPress is not loaded. This tool must be run within a WordPress environment.',
+            ];
+        }
+
+        $categories = [
+            'information_disclosure' => [
+                'label' => 'Information Disclosure',
+                'checks' => $this->checkInformationDisclosure(),
+            ],
+            'xmlrpc' => [
+                'label' => 'XML-RPC Security',
+                'checks' => $this->checkXmlRpc(),
+            ],
+            'login_security' => [
+                'label' => 'Login & Access Security',
+                'checks' => $this->checkLoginSecurity(),
+            ],
+            'configuration' => [
+                'label' => 'Configuration Security',
+                'checks' => $this->checkConfiguration(),
+            ],
+            'updates' => [
+                'label' => 'Update Status',
+                'checks' => $this->checkUpdates(),
+            ],
+            'file_permissions' => [
+                'label' => 'File Permissions',
+                'checks' => $this->checkFilePermissions(),
+            ],
+            'security_headers' => [
+                'label' => 'Security Headers',
+                'checks' => $this->checkSecurityHeaders(),
+            ],
+        ];
+
+        // Calculate summary and score
+        $summary = ['critical' => 0, 'warning' => 0, 'passed' => 0, 'info' => 0];
+        $totalChecks = 0;
+        $scorePoints = 0;
+
+        foreach ($categories as &$category) {
+            foreach ($category['checks'] as $check) {
+                $status = $check['status'];
+                $summary[$status] = ($summary[$status] ?? 0) + 1;
+                $totalChecks++;
+
+                // Score calculation
+                $scorePoints += match ($status) {
+                    'passed' => 100,
+                    'info' => 75,
+                    'warning' => 50,
+                    'critical' => 0,
+                    default => 50,
+                };
+            }
+        }
+
+        $score = $totalChecks > 0 ? (int) round($scorePoints / $totalChecks) : 0;
+        $grade = match (true) {
+            $score >= 90 => 'A',
+            $score >= 80 => 'B',
+            $score >= 70 => 'C',
+            $score >= 60 => 'D',
+            default => 'F',
+        };
+
+        // Generate recommendations
+        $recommendations = $this->generateRecommendations($categories);
+
+        return [
+            'wordpress_version' => get_bloginfo('version'),
+            'php_version' => PHP_VERSION,
+            'score' => $score,
+            'grade' => $grade,
+            'summary' => $summary,
+            'categories' => $categories,
+            'recommendations' => $recommendations,
+        ];
+    }
+
+    /**
+     * Check for information disclosure vulnerabilities
+     */
+    private function checkInformationDisclosure(): array
+    {
+        $checks = [];
+
+        // Sensitive files - check file_exists() in ABSPATH
+        $sensitiveFiles = [
+            'readme.html' => 'Contains WordPress version information',
+            'license.txt' => 'Confirms WordPress installation',
+            'wp-config-sample.php' => 'Sample config should be removed',
+        ];
+
+        foreach ($sensitiveFiles as $file => $reason) {
+            $fileKey = str_replace(['.', '-'], '_', $file);
+            $exists = file_exists(ABSPATH . $file);
+            $checks[$fileKey] = [
+                'status' => $exists ? 'warning' : 'passed',
+                'message' => $exists
+                    ? "File {$file} is accessible: {$reason}"
+                    : "File {$file} not accessible",
+                'recommendation' => $exists ? "Remove or restrict access to {$file}" : null,
+            ];
+        }
+
+        // Debug log accessible
+        $debugLog = WP_CONTENT_DIR . '/debug.log';
+        $debugLogExists = file_exists($debugLog);
+        $checks['debug_log'] = [
+            'status' => $debugLogExists ? 'critical' : 'passed',
+            'message' => $debugLogExists
+                ? 'debug.log exists and may be publicly accessible'
+                : 'No debug.log file found',
+            'recommendation' => $debugLogExists
+                ? 'Delete debug.log or move it outside web root, and add .htaccess rules to block access'
+                : null,
+        ];
+
+        // install.php accessible (informational - WordPress handles this)
+        $installPhpExists = file_exists(ABSPATH . 'wp-admin/install.php');
+        $checks['install_php'] = [
+            'status' => $installPhpExists ? 'info' : 'passed',
+            'message' => $installPhpExists
+                ? 'install.php exists (WordPress protects this when already installed)'
+                : 'install.php not found',
+        ];
+
+        // REST API user enumeration
+        $checks['rest_api_users'] = $this->checkRestApiUsers();
+
+        // Generator meta tag - check if filter removes it
+        $hasGeneratorFilter = has_filter('the_generator');
+        $checks['generator_tag'] = [
+            'status' => $hasGeneratorFilter ? 'passed' : 'warning',
+            'message' => $hasGeneratorFilter
+                ? 'Generator tag is filtered'
+                : 'WordPress version exposed in generator meta tag',
+            'recommendation' => !$hasGeneratorFilter
+                ? "Add remove_action('wp_head', 'wp_generator') or filter 'the_generator'"
+                : null,
+        ];
+
+        return $checks;
+    }
+
+    /**
+     * Check if REST API users endpoint is publicly accessible
+     */
+    private function checkRestApiUsers(): array
+    {
+        // Check if the REST API is available and users endpoint is accessible
+        // We check if there's a filter blocking it
+        $usersEndpointBlocked = has_filter('rest_endpoints', function ($endpoints) {
+            return !isset($endpoints['/wp/v2/users']);
+        }) || has_filter('rest_user_query');
+
+        // Also check for common security plugin filters
+        $hasRestUserFilters = has_filter('rest_user_collection_params')
+            || has_filter('rest_prepare_user')
+            || has_filter('rest_authentication_errors');
+
+        $isProtected = $usersEndpointBlocked || $hasRestUserFilters;
+
+        return [
+            'status' => $isProtected ? 'passed' : 'warning',
+            'message' => $isProtected
+                ? 'REST API users endpoint appears to be protected'
+                : 'REST API users endpoint may be publicly accessible (/wp-json/wp/v2/users)',
+            'recommendation' => !$isProtected
+                ? 'Restrict REST API access to authenticated users or disable users endpoint'
+                : null,
+        ];
+    }
+
+    /**
+     * Check XML-RPC security
+     */
+    private function checkXmlRpc(): array
+    {
+        $checks = [];
+
+        // Check if xmlrpc.php exists
+        $xmlrpcExists = file_exists(ABSPATH . 'xmlrpc.php');
+
+        // Check if XML-RPC is disabled via filter
+        $xmlrpcDisabled = has_filter('xmlrpc_enabled');
+        $xmlrpcActuallyDisabled = false;
+
+        if ($xmlrpcDisabled) {
+            // Try to determine if the filter disables it
+            $xmlrpcActuallyDisabled = !apply_filters('xmlrpc_enabled', true);
+        }
+
+        $isVulnerable = $xmlrpcExists && !$xmlrpcActuallyDisabled;
+
+        $checks['xmlrpc_enabled'] = [
+            'status' => $isVulnerable ? 'warning' : 'passed',
+            'message' => $isVulnerable
+                ? 'XML-RPC is enabled - can be used for brute force and DDoS attacks'
+                : 'XML-RPC is disabled or blocked',
+            'recommendation' => $isVulnerable
+                ? "Disable XML-RPC if not needed: add_filter('xmlrpc_enabled', '__return_false');"
+                : null,
+        ];
+
+        // Check pingbacks
+        $pingsOpen = function_exists('pings_open') ? pings_open() : get_option('default_ping_status') === 'open';
+        $checks['pingbacks'] = [
+            'status' => $pingsOpen ? 'warning' : 'passed',
+            'message' => $pingsOpen
+                ? 'Pingbacks are enabled - can be used for DDoS amplification'
+                : 'Pingbacks disabled',
+            'recommendation' => $pingsOpen
+                ? 'Disable pingbacks in Settings > Discussion or via filter'
+                : null,
+        ];
+
+        return $checks;
+    }
+
+    /**
+     * Check login and access security
+     */
+    private function checkLoginSecurity(): array
+    {
+        $checks = [];
+
+        // Default admin URL (informational - recommend using custom login URL)
+        $checks['default_login_url'] = [
+            'status' => 'info',
+            'message' => 'Standard login URLs in use (/wp-admin/, /wp-login.php)',
+            'recommendation' => 'Consider using a security plugin to change login URLs to reduce brute force attacks',
+        ];
+
+        // Admin username exists
+        $adminUser = get_user_by('login', 'admin');
+        $administratorUser = get_user_by('login', 'administrator');
+        $hasCommonUsername = $adminUser || $administratorUser;
+
+        $checks['admin_username'] = [
+            'status' => $hasCommonUsername ? 'warning' : 'passed',
+            'message' => $hasCommonUsername
+                ? 'Common admin username exists (admin/administrator) - easy to guess'
+                : 'No common admin usernames found',
+            'recommendation' => $hasCommonUsername
+                ? 'Create a new administrator account with a unique username and delete the common one'
+                : null,
+        ];
+
+        // Check if user ID 1 is administrator
+        $userOne = get_user_by('id', 1);
+        $userOneIsAdmin = $userOne && in_array('administrator', $userOne->roles ?? []);
+
+        $checks['admin_user_id_1'] = [
+            'status' => $userOneIsAdmin ? 'info' : 'passed',
+            'message' => $userOneIsAdmin
+                ? 'Administrator has user ID 1 - easily enumerable via ?author=1'
+                : 'Administrator is not user ID 1',
+            'recommendation' => $userOneIsAdmin
+                ? 'Consider creating a new admin user and changing user ID 1 to a non-admin role'
+                : null,
+        ];
+
+        // Count administrators
+        $admins = get_users(['role' => 'administrator']);
+        $adminCount = count($admins);
+        $tooManyAdmins = $adminCount > 3;
+
+        $checks['admin_count'] = [
+            'status' => $tooManyAdmins ? 'warning' : 'passed',
+            'message' => "Found {$adminCount} administrator account(s)",
+            'recommendation' => $tooManyAdmins
+                ? 'Review admin accounts - limit to necessary users only and use Editor role where possible'
+                : null,
+        ];
+
+        return $checks;
+    }
+
+    /**
+     * Check WordPress configuration security
+     */
+    private function checkConfiguration(): array
+    {
+        $checks = [];
+
+        // Debug settings
+        $wpDebugEnabled = defined('WP_DEBUG') && WP_DEBUG;
+        $checks['wp_debug'] = [
+            'status' => $wpDebugEnabled ? 'warning' : 'passed',
+            'message' => $wpDebugEnabled ? 'WP_DEBUG is enabled' : 'WP_DEBUG is disabled',
+            'recommendation' => $wpDebugEnabled
+                ? "Set WP_DEBUG to false in production: define('WP_DEBUG', false);"
+                : null,
+        ];
+
+        $wpDebugDisplayEnabled = defined('WP_DEBUG_DISPLAY') && WP_DEBUG_DISPLAY;
+        $checks['wp_debug_display'] = [
+            'status' => $wpDebugDisplayEnabled ? 'critical' : 'passed',
+            'message' => $wpDebugDisplayEnabled
+                ? 'WP_DEBUG_DISPLAY is enabled - errors shown publicly!'
+                : 'WP_DEBUG_DISPLAY is disabled',
+            'recommendation' => $wpDebugDisplayEnabled
+                ? "Disable immediately: define('WP_DEBUG_DISPLAY', false);"
+                : null,
+        ];
+
+        $wpDebugLogEnabled = defined('WP_DEBUG_LOG') && WP_DEBUG_LOG;
+        $checks['wp_debug_log'] = [
+            'status' => $wpDebugLogEnabled ? 'info' : 'passed',
+            'message' => $wpDebugLogEnabled
+                ? 'WP_DEBUG_LOG is enabled - ensure debug.log is protected'
+                : 'WP_DEBUG_LOG is disabled',
+            'recommendation' => $wpDebugLogEnabled
+                ? 'Ensure debug.log is not publicly accessible and is regularly cleared'
+                : null,
+        ];
+
+        // File editor
+        $fileEditDisabled = defined('DISALLOW_FILE_EDIT') && DISALLOW_FILE_EDIT;
+        $checks['file_edit_disabled'] = [
+            'status' => $fileEditDisabled ? 'passed' : 'warning',
+            'message' => $fileEditDisabled
+                ? 'File editing is disabled'
+                : 'Theme/plugin editor is enabled - security risk',
+            'recommendation' => !$fileEditDisabled
+                ? "Add define('DISALLOW_FILE_EDIT', true); to wp-config.php"
+                : null,
+        ];
+
+        // File mods
+        $fileModsDisabled = defined('DISALLOW_FILE_MODS') && DISALLOW_FILE_MODS;
+        $checks['file_mods_disabled'] = [
+            'status' => $fileModsDisabled ? 'passed' : 'info',
+            'message' => $fileModsDisabled
+                ? 'File modifications disabled (updates via dashboard blocked)'
+                : 'File modifications allowed',
+        ];
+
+        // SSL
+        $forceSslAdmin = defined('FORCE_SSL_ADMIN') && FORCE_SSL_ADMIN;
+        $checks['force_ssl_admin'] = [
+            'status' => $forceSslAdmin ? 'passed' : 'warning',
+            'message' => $forceSslAdmin
+                ? 'SSL is forced for admin'
+                : 'FORCE_SSL_ADMIN not set',
+            'recommendation' => !$forceSslAdmin
+                ? "Add define('FORCE_SSL_ADMIN', true); to wp-config.php"
+                : null,
+        ];
+
+        $isHttps = is_ssl() || (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on')
+            || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
+        $checks['https_active'] = [
+            'status' => $isHttps ? 'passed' : 'critical',
+            'message' => 'Site ' . ($isHttps ? 'is' : 'is NOT') . ' using HTTPS',
+            'recommendation' => !$isHttps
+                ? 'Configure SSL certificate and redirect all traffic to HTTPS'
+                : null,
+        ];
+
+        // Security keys - check if all 8 are defined and not default
+        $keys = [
+            'AUTH_KEY', 'SECURE_AUTH_KEY', 'LOGGED_IN_KEY', 'NONCE_KEY',
+            'AUTH_SALT', 'SECURE_AUTH_SALT', 'LOGGED_IN_SALT', 'NONCE_SALT',
+        ];
+        $allKeysDefined = true;
+        $missingKeys = [];
+
+        foreach ($keys as $key) {
+            if (!defined($key) || constant($key) === 'put your unique phrase here' || constant($key) === '') {
+                $allKeysDefined = false;
+                $missingKeys[] = $key;
+            }
+        }
+
+        $checks['security_keys'] = [
+            'status' => $allKeysDefined ? 'passed' : 'critical',
+            'message' => $allKeysDefined
+                ? 'All security keys are properly defined'
+                : 'Security keys missing or using default values: ' . implode(', ', $missingKeys),
+            'recommendation' => !$allKeysDefined
+                ? 'Generate unique keys at https://api.wordpress.org/secret-key/1.1/salt/'
+                : null,
+        ];
+
+        // Table prefix
+        global $wpdb;
+        $usingDefaultPrefix = $wpdb->prefix === 'wp_';
+        $checks['table_prefix'] = [
+            'status' => $usingDefaultPrefix ? 'info' : 'passed',
+            'message' => $usingDefaultPrefix
+                ? 'Using default table prefix (wp_)'
+                : 'Using custom table prefix (' . $wpdb->prefix . ')',
+            'recommendation' => $usingDefaultPrefix
+                ? 'Consider using a custom table prefix for new installations'
+                : null,
+        ];
+
+        // Auto-updates
+        $autoUpdateCore = defined('WP_AUTO_UPDATE_CORE') ? WP_AUTO_UPDATE_CORE : 'minor';
+        $checks['auto_update_core'] = [
+            'status' => $autoUpdateCore === true || $autoUpdateCore === 'minor' ? 'passed' : 'info',
+            'message' => 'Auto-update core: ' . ($autoUpdateCore === true ? 'all updates' : ($autoUpdateCore === 'minor' ? 'minor updates only' : ($autoUpdateCore === false ? 'disabled' : $autoUpdateCore))),
+        ];
+
+        return $checks;
+    }
+
+    /**
+     * Check WordPress update status
+     */
+    private function checkUpdates(): array
+    {
+        $checks = [];
+
+        // Load update functions if not already loaded
+        if (!function_exists('get_core_updates')) {
+            require_once ABSPATH . 'wp-admin/includes/update.php';
+        }
+
+        // Force update check if transients are stale
+        wp_version_check();
+        wp_update_plugins();
+        wp_update_themes();
+
+        // Core updates
+        $coreUpdates = get_core_updates();
+        $hasUpdate = !empty($coreUpdates) && isset($coreUpdates[0]->response) && $coreUpdates[0]->response === 'upgrade';
+        $latestVersion = $hasUpdate && isset($coreUpdates[0]->version) ? $coreUpdates[0]->version : null;
+
+        $checks['core_update'] = [
+            'status' => $hasUpdate ? 'critical' : 'passed',
+            'message' => $hasUpdate
+                ? 'WordPress update available: ' . ($latestVersion ?? 'unknown') . ' (current: ' . get_bloginfo('version') . ')'
+                : 'WordPress core is up to date (' . get_bloginfo('version') . ')',
+            'recommendation' => $hasUpdate
+                ? 'Update WordPress core immediately for security patches'
+                : null,
+        ];
+
+        // Plugin updates
+        $pluginUpdates = get_plugin_updates();
+        $pluginUpdateCount = is_array($pluginUpdates) ? count($pluginUpdates) : 0;
+
+        $checks['plugin_updates'] = [
+            'status' => $pluginUpdateCount > 0 ? 'warning' : 'passed',
+            'message' => $pluginUpdateCount > 0
+                ? "{$pluginUpdateCount} plugin(s) have updates available"
+                : 'All plugins are up to date',
+            'recommendation' => $pluginUpdateCount > 0
+                ? 'Update plugins to their latest versions'
+                : null,
+        ];
+
+        // Theme updates
+        $themeUpdates = get_theme_updates();
+        $themeUpdateCount = is_array($themeUpdates) ? count($themeUpdates) : 0;
+
+        $checks['theme_updates'] = [
+            'status' => $themeUpdateCount > 0 ? 'warning' : 'passed',
+            'message' => $themeUpdateCount > 0
+                ? "{$themeUpdateCount} theme(s) have updates available"
+                : 'All themes are up to date',
+            'recommendation' => $themeUpdateCount > 0
+                ? 'Update themes to their latest versions'
+                : null,
+        ];
+
+        // Inactive plugins (attack surface)
+        if (!function_exists('get_plugins')) {
+            require_once ABSPATH . 'wp-admin/includes/plugin.php';
+        }
+
+        $allPlugins = get_plugins();
+        $activePlugins = get_option('active_plugins', []);
+        $inactiveCount = count($allPlugins) - count($activePlugins);
+
+        $checks['inactive_plugins'] = [
+            'status' => $inactiveCount > 0 ? 'info' : 'passed',
+            'message' => $inactiveCount > 0
+                ? "{$inactiveCount} inactive plugin(s) - consider removing unused plugins"
+                : 'No inactive plugins',
+            'recommendation' => $inactiveCount > 0
+                ? 'Remove inactive plugins to reduce attack surface'
+                : null,
+        ];
+
+        return $checks;
+    }
+
+    /**
+     * Check file permissions
+     */
+    private function checkFilePermissions(): array
+    {
+        $checks = [];
+
+        // wp-config.php permissions
+        $wpConfigPath = ABSPATH . 'wp-config.php';
+        if (!file_exists($wpConfigPath)) {
+            // Check one level up (common setup)
+            $wpConfigPath = dirname(ABSPATH) . '/wp-config.php';
+        }
+
+        if (file_exists($wpConfigPath)) {
+            $perms = fileperms($wpConfigPath) & 0777;
+            $permsOctal = decoct($perms);
+            $isSecure = in_array($perms, [0400, 0440, 0600, 0640, 0644]);
+
+            $checks['wp_config_permissions'] = [
+                'status' => $isSecure ? 'passed' : 'warning',
+                'message' => "wp-config.php permissions: {$permsOctal}",
+                'recommendation' => !$isSecure
+                    ? 'Set wp-config.php permissions to 400 or 440 for better security'
+                    : null,
+            ];
+        } else {
+            $checks['wp_config_permissions'] = [
+                'status' => 'warning',
+                'message' => 'wp-config.php not found in expected location',
+            ];
+        }
+
+        // .htaccess exists
+        $htaccessExists = file_exists(ABSPATH . '.htaccess');
+        $checks['htaccess_exists'] = [
+            'status' => $htaccessExists ? 'passed' : 'info',
+            'message' => $htaccessExists
+                ? '.htaccess file exists'
+                : 'No .htaccess file found (may be using nginx or other server)',
+        ];
+
+        // Uploads directory
+        $uploadsDir = wp_upload_dir();
+        $uploadsWritable = is_writable($uploadsDir['basedir']);
+        $checks['uploads_dir'] = [
+            'status' => $uploadsWritable ? 'passed' : 'warning',
+            'message' => $uploadsWritable
+                ? 'Uploads directory is writable'
+                : 'Uploads directory is not writable - uploads will fail',
+        ];
+
+        // Check for index.php in uploads (prevents directory listing)
+        $uploadsIndexExists = file_exists($uploadsDir['basedir'] . '/index.php');
+        $checks['uploads_index'] = [
+            'status' => $uploadsIndexExists ? 'passed' : 'info',
+            'message' => $uploadsIndexExists
+                ? 'Uploads directory has index.php (prevents listing)'
+                : 'Uploads directory may allow directory listing',
+            'recommendation' => !$uploadsIndexExists
+                ? 'Add an empty index.php to uploads directory'
+                : null,
+        ];
+
+        return $checks;
+    }
+
+    /**
+     * Check security headers
+     */
+    private function checkSecurityHeaders(): array
+    {
+        $checks = [];
+
+        // Make a request to the site and check headers
+        $response = wp_remote_get(home_url('/'), [
+            'sslverify' => false,
+            'timeout' => 10,
+        ]);
+
+        if (is_wp_error($response)) {
+            return [
+                'headers_check' => [
+                    'status' => 'warning',
+                    'message' => 'Could not check security headers: ' . $response->get_error_message(),
+                ],
+            ];
+        }
+
+        $headers = wp_remote_retrieve_headers($response);
+
+        // Convert to lowercase keys for consistent checking
+        $headersLower = [];
+        foreach ($headers as $key => $value) {
+            $headersLower[strtolower($key)] = $value;
+        }
+
+        $securityHeaders = [
+            'x-frame-options' => [
+                'name' => 'X-Frame-Options',
+                'severity' => 'warning',
+                'purpose' => 'Clickjacking protection',
+            ],
+            'x-content-type-options' => [
+                'name' => 'X-Content-Type-Options',
+                'severity' => 'warning',
+                'purpose' => 'MIME sniffing protection',
+            ],
+            'strict-transport-security' => [
+                'name' => 'Strict-Transport-Security (HSTS)',
+                'severity' => 'info',
+                'purpose' => 'Force HTTPS connections',
+            ],
+            'content-security-policy' => [
+                'name' => 'Content-Security-Policy',
+                'severity' => 'info',
+                'purpose' => 'XSS and injection protection',
+            ],
+            'x-xss-protection' => [
+                'name' => 'X-XSS-Protection',
+                'severity' => 'info',
+                'purpose' => 'Legacy XSS filter',
+            ],
+            'referrer-policy' => [
+                'name' => 'Referrer-Policy',
+                'severity' => 'info',
+                'purpose' => 'Control referrer information',
+            ],
+        ];
+
+        foreach ($securityHeaders as $header => $info) {
+            $hasHeader = isset($headersLower[$header]);
+            $headerKey = str_replace('-', '_', $header);
+
+            $checks[$headerKey] = [
+                'status' => $hasHeader ? 'passed' : $info['severity'],
+                'message' => $hasHeader
+                    ? "{$info['name']} header is set: " . (is_string($headersLower[$header]) ? $headersLower[$header] : 'present')
+                    : "{$info['name']} header is missing ({$info['purpose']})",
+                'recommendation' => !$hasHeader
+                    ? "Add {$info['name']} header for {$info['purpose']}"
+                    : null,
+            ];
+        }
+
+        // Check for X-Powered-By (should be hidden)
+        $hasPoweredBy = isset($headersLower['x-powered-by']);
+        $checks['x_powered_by'] = [
+            'status' => $hasPoweredBy ? 'warning' : 'passed',
+            'message' => $hasPoweredBy
+                ? 'X-Powered-By header exposes PHP version: ' . $headersLower['x-powered-by']
+                : 'X-Powered-By header is hidden',
+            'recommendation' => $hasPoweredBy
+                ? 'Hide X-Powered-By header in php.ini: expose_php = Off'
+                : null,
+        ];
+
+        return $checks;
+    }
+
+    /**
+     * Generate prioritized recommendations from all checks
+     */
+    private function generateRecommendations(array $categories): array
+    {
+        $recommendations = [];
+
+        $priorityMap = [
+            'critical' => 1,
+            'warning' => 2,
+            'info' => 3,
+        ];
+
+        foreach ($categories as $categoryKey => $category) {
+            foreach ($category['checks'] as $checkKey => $check) {
+                if (isset($check['recommendation']) && $check['recommendation'] !== null) {
+                    $priority = match ($check['status']) {
+                        'critical' => 'critical',
+                        'warning' => 'high',
+                        'info' => 'medium',
+                        default => 'low',
+                    };
+
+                    $recommendations[] = [
+                        'priority' => $priority,
+                        'category' => $category['label'],
+                        'check' => $checkKey,
+                        'action' => $check['recommendation'],
+                    ];
+                }
+            }
+        }
+
+        // Sort by priority
+        usort($recommendations, function ($a, $b) use ($priorityMap) {
+            $priorityA = match ($a['priority']) {
+                'critical' => 1,
+                'high' => 2,
+                'medium' => 3,
+                default => 4,
+            };
+            $priorityB = match ($b['priority']) {
+                'critical' => 1,
+                'high' => 2,
+                'medium' => 3,
+                default => 4,
+            };
+            return $priorityA <=> $priorityB;
+        });
+
+        return $recommendations;
     }
 
     /**
