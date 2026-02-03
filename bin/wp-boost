@@ -66,24 +66,50 @@ if (isset($options['version'])) {
 
 if (isset($options['init'])) {
     $configPath = getcwd() . '/.mcp.json';
-
-    if (file_exists($configPath)) {
-        echo "⚠ .mcp.json already exists at: $configPath\n";
-        echo "Delete it first if you want to regenerate.\n";
-        exit(1);
-    }
-
-    // Determine the correct path to wp-boost binary
     $wpBoostPath = 'vendor/bin/wp-boost';
 
-    $config = [
-        'servers' => [
-            'wordpress-boost' => [
-                'command' => 'php',
-                'args' => [$wpBoostPath],
-            ],
-        ],
+    $wordpressBoostConfig = [
+        'command' => 'php',
+        'args' => [$wpBoostPath],
     ];
+
+    // Check if .mcp.json already exists
+    if (file_exists($configPath)) {
+        $existingContent = file_get_contents($configPath);
+        $existingConfig = json_decode($existingContent, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            fwrite(STDERR, "Error: Existing .mcp.json is not valid JSON\n");
+            exit(1);
+        }
+
+        // Check if wordpress-boost is already configured
+        $serverKey = $existingConfig['mcpServers'] ?? $existingConfig['servers'] ?? [];
+        if (isset($serverKey['wordpress-boost'])) {
+            echo "✓ wordpress-boost is already configured in .mcp.json\n";
+            exit(0);
+        }
+
+        // Add wordpress-boost to existing config (support both formats)
+        if (isset($existingConfig['mcpServers'])) {
+            $existingConfig['mcpServers']['wordpress-boost'] = $wordpressBoostConfig;
+        } elseif (isset($existingConfig['servers'])) {
+            $existingConfig['servers']['wordpress-boost'] = $wordpressBoostConfig;
+        } else {
+            $existingConfig['mcpServers'] = ['wordpress-boost' => $wordpressBoostConfig];
+        }
+
+        $config = $existingConfig;
+        echo "✓ Added wordpress-boost to existing .mcp.json\n";
+    } else {
+        // Create new config
+        $config = [
+            'mcpServers' => [
+                'wordpress-boost' => $wordpressBoostConfig,
+            ],
+        ];
+        echo "✓ Created .mcp.json\n";
+    }
 
     $json = json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 
@@ -92,7 +118,6 @@ if (isset($options['init'])) {
         exit(1);
     }
 
-    echo "✓ Created .mcp.json\n";
     echo "\nNext steps:\n";
     echo "  1. Open this folder in your AI editor (Cursor, VS Code, Windsurf)\n";
     echo "  2. The MCP server will be available automatically\n";
