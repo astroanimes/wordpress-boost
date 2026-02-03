@@ -1,0 +1,82 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * WordPress Boost MCP Server
+ *
+ * Standalone entry point for running the MCP server.
+ * Can be used without WP-CLI: php wp-boost --path=/path/to/wordpress
+ */
+
+declare(strict_types=1);
+
+// Find autoloader
+$autoloadPaths = [
+    __DIR__ . '/../vendor/autoload.php',           // When installed as a project
+    __DIR__ . '/../../../autoload.php',            // When installed as a dependency
+];
+
+$autoloaderFound = false;
+foreach ($autoloadPaths as $autoloadPath) {
+    if (file_exists($autoloadPath)) {
+        require $autoloadPath;
+        $autoloaderFound = true;
+        break;
+    }
+}
+
+if (!$autoloaderFound) {
+    fwrite(STDERR, "Error: Could not find Composer autoloader.\n");
+    fwrite(STDERR, "Run 'composer install' to install dependencies.\n");
+    exit(1);
+}
+
+use WordPressBoost\McpServer;
+use WordPressBoost\WordPress\Bootstrap;
+
+// Parse command line arguments
+$options = getopt('', ['path:', 'help', 'version']);
+
+if (isset($options['help'])) {
+    echo <<<HELP
+WordPress Boost MCP Server
+
+Usage:
+  wp-boost [options]
+
+Options:
+  --path=<path>    Path to WordPress installation (default: current directory)
+  --help           Display this help message
+  --version        Display version information
+
+Examples:
+  wp-boost --path=/var/www/html/wordpress
+  wp-boost
+
+For WP-CLI integration:
+  wp boost:mcp
+
+HELP;
+    exit(0);
+}
+
+if (isset($options['version'])) {
+    echo "WordPress Boost v1.0.0\n";
+    exit(0);
+}
+
+// Determine WordPress path
+$wpPath = $options['path'] ?? getcwd();
+
+// Bootstrap WordPress
+try {
+    $bootstrap = new Bootstrap($wpPath);
+    $bootstrap->load();
+} catch (\Exception $e) {
+    fwrite(STDERR, "Error: " . $e->getMessage() . "\n");
+    exit(1);
+}
+
+// Start MCP server
+$server = new McpServer();
+$server->run();

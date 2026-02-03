@@ -1,0 +1,39 @@
+{
+    "name": "thanoseleftherakos/wordpress-boost",
+    "description": "An MCP server that provides AI agents with deep context about WordPress codebases",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["wordpress", "mcp", "ai", "development", "wp-cli"],
+    "homepage": "https://github.com/thanoseleftherakos/wordpress-boost",
+    "authors": [
+        {
+            "name": "Thanos Eleftherakos"
+        }
+    ],
+    "require": {
+        "php": "^7.4|^8.0|^8.1|^8.2|^8.3"
+    },
+    "require-dev": {
+        "fakerphp/faker": "^1.23"
+    },
+    "autoload": {
+        "psr-4": {
+            "WordPressBoost\\": "src/"
+        }
+    },
+    "bin": [
+        "bin/wp-boost"
+    ],
+    "extra": {
+        "commands": [
+            "WordPressBoost\\Commands\\McpCommand"
+        ]
+    },
+    "config": {
+        "sort-packages": true,
+        "preferred-install": "dist",
+        "optimize-autoloader": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
